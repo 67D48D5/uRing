@@ -88,9 +88,24 @@ def discover_boards(dept_info, dept_url):
         res = requests.get(dept_url, headers=headers, timeout=7)
         soup = BeautifulSoup(res.text, "html.parser")
 
-        cms_selectors = detect_cms_and_get_selectors(soup, dept_url)
+        print(f"  -> Accessed department homepage: {dept_url}")
 
-        # If CMS detection fails, add to manual review list
+        # Step 1: Look for Sitemap link
+        target_soup = soup
+        sitemap_link = soup.find("a", string=re.compile(r"사이트맵|Sitemap", re.I))
+
+        if sitemap_link and sitemap_link.get("href"):
+            sitemap_url = urljoin(dept_url, sitemap_link["href"])
+            try:
+                s_res = requests.get(sitemap_url, headers=headers, timeout=5)
+                target_soup = BeautifulSoup(s_res.text, "html.parser")
+                print(f"  -> Found Sitemap: {sitemap_url}")
+            except:
+                print(f"  -> Failed to access Sitemap, falling back to homepage.")
+
+        # Step 2: Detect CMS and get selectors
+        cms_selectors = detect_cms_and_get_selectors(target_soup, dept_url)
+
         if cms_selectors is None:
             manual_review_needed.append(
                 {
@@ -102,9 +117,10 @@ def discover_boards(dept_info, dept_url):
             )
             return []
 
-        links = soup.find_all("a", href=True)
+        # Step 3: Extract board links
+        links = target_soup.find_all("a", href=True)
         seen_urls = set()
-        id_counts = {}  # To handle duplicate IDs
+        id_counts = {}
         dept_domain = urlparse(dept_url).netloc.lower()
 
         for link in links:
@@ -158,32 +174,30 @@ def discover_boards(dept_info, dept_url):
     return boards
 
 
-# Load existing Yonsei departments data
-with open("result/yonsei_departments.json", "r", encoding="utf-8") as f:
-    data = json.load(f)
+# Execution
+if __name__ == "__main__":
+    with open("result/yonsei_departments.json", "r", encoding="utf-8") as f:
+        data = json.load(f)
 
-# Iterate through each department to find useful boards
-for campus in data:
-    for college in campus["colleges"]:
-        for dept in college["departments"]:
-            # To pass campus info for manual review logging
-            info = {"campus": campus["campus"], "name": dept["name"]}
-            print(
-                f"Searching boards for: [{campus['campus']}] {dept['name']} ({dept['url']})"
-            )
-            dept["boards"] = discover_boards(info, dept["url"])
+    # Iterate through each department to find useful boards
+    for campus in data:
+        for college in campus["colleges"]:
+            for dept in college["departments"]:
+                info = {"campus": campus["campus"], "name": dept["name"]}
+                print(
+                    f"Searching boards for [{campus['campus']}] {dept['name']} ({dept['url']})"
+                )
+                dept["boards"] = discover_boards(info, dept["url"])
 
-# Save updated data with boards
-with open("result/yonsei_departments_boards.json", "w", encoding="utf-8") as f:
-    json.dump(data, f, ensure_ascii=False, indent=4)
+    with open("result/yonsei_departments_boards.json", "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
 
-# Save manual review needed departments
-with open("result/manual_review_needed.json", "w", encoding="utf-8") as f:
-    json.dump(manual_review_needed, f, ensure_ascii=False, indent=4)
+    with open("result/manual_review_needed.json", "w", encoding="utf-8") as f:
+        json.dump(manual_review_needed, f, ensure_ascii=False, indent=4)
 
-print(
-    "\nUpdated 'result/yonsei_departments_boards.json' with discovered boards successfully."
-)
-print(
-    f"Saved departments needing manual review for {len(manual_review_needed)} to 'result/manual_review_needed.json'."
-)
+    print(
+        "\nUpdated 'result/yonsei_departments_boards.json' with discovered boards successfully."
+    )
+    print(
+        f"Saved departments needing manual review for {len(manual_review_needed)} to 'result/manual_review_needed.json'."
+    )
