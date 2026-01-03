@@ -15,7 +15,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::models::config::{Config, LocaleConfig};
-use crate::models::crawler::{BoardConfig, Campus, Department, Notice};
+use crate::models::crawler::{BoardConfig, Campus, Notice};
 
 use crate::config::{clean_date, clean_title, format_notice};
 use crate::locale::load_locale_or_default;
@@ -57,7 +57,9 @@ fn load_campuses<P: AsRef<Path>>(path: P) -> Result<Vec<Campus>, Box<dyn Error>>
 /// Fetch notices from a single board
 async fn fetch_board_notices(
     campus: &str,
-    department: &Department,
+    college: &str,
+    department_id: &str,
+    department_name: &str,
     board: &BoardConfig,
     client: &Client,
     config: &Config,
@@ -101,8 +103,9 @@ async fn fetch_board_notices(
             if !title.is_empty() {
                 notices.push(Notice {
                     campus: campus.to_string(),
-                    department_id: department.id.clone(),
-                    department_name: department.name.clone(),
+                    college: college.to_string(),
+                    department_id: department_id.to_string(),
+                    department_name: department_name.to_string(),
                     board_id: board.id.clone(),
                     board_name: board.name.clone(),
                     title,
@@ -131,7 +134,8 @@ async fn fetch_all_notices(
     let delay = Duration::from_millis(config.crawler.request_delay_ms);
 
     for campus in campuses {
-        for dept in &campus.departments {
+        // Use the all_departments() method to get all departments (from colleges and direct)
+        for (college_name, dept) in campus.all_departments() {
             if config.logging.show_progress {
                 println!(
                     "{}",
@@ -142,7 +146,7 @@ async fn fetch_all_notices(
                 );
             }
             for board in &dept.boards {
-                match fetch_board_notices(&campus.campus, dept, board, &client, config).await {
+                match fetch_board_notices(&campus.campus, college_name, &dept.id, &dept.name, board, &client, config).await {
                     Ok(notices) => {
                         if config.logging.show_progress {
                             println!(
@@ -214,7 +218,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let total_boards: usize = campuses
         .iter()
-        .map(|c| c.departments.iter().map(|d| d.boards.len()).sum::<usize>())
+        .map(|c| c.all_departments().iter().map(|(_, d)| d.boards.len()).sum::<usize>())
         .sum();
     if config.logging.show_progress {
         println!(
