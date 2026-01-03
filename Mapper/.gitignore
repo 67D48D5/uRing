@@ -1,0 +1,4 @@
+# .gitignore for `Mapper` project
+
+# Ignore data files
+/result/*.json
