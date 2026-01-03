@@ -35,7 +35,7 @@ export async function fetchNotices(
         // Simulate network delay
         await new Promise((resolve) => setTimeout(resolve, 300));
 
-        const validIds = [1, 2, 3];
+        const validIds = [1, 2, 3, 4, 5, 6];
         const id = validIds.includes(responseId) ? responseId : 1;
 
         const response = await fetch(`/data/resp${id}.json`);
@@ -69,13 +69,23 @@ export async function fetchNotices(
  */
 export async function fetchAllNotices(): Promise<ApiResponse> {
     try {
-        const [resp1, resp2, resp3] = await Promise.all([
+        const [resp1, resp2, resp3, resp4, resp5, resp6] = await Promise.all([
             fetchNotices(1),
             fetchNotices(2),
             fetchNotices(3),
+            fetchNotices(4),
+            fetchNotices(5),
+            fetchNotices(6),
         ]);
 
-        const allData = [...resp1.data, ...resp2.data, ...resp3.data];
+        const allData = [
+            ...resp1.data,
+            ...resp2.data,
+            ...resp3.data,
+            ...resp4.data,
+            ...resp5.data,
+            ...resp6.data,
+        ];
 
         return {
             data: allData,
