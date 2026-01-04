@@ -18,7 +18,7 @@ max_concurrent = 5
 site_map = "data/siteMap.json"
 
 # Path to output directory (will create department subdirectories with board JSON files)
-output = "data/result"
+output = "data/output"
 
 [cleaning]
 # Patterns to remove from titles

@@ -46,7 +46,7 @@ impl Default for Config {
             },
             paths: PathsConfig {
                 site_map: "data/siteMap.json".to_string(),
-                output: "data/result/notices.json".to_string(),
+                output: "data/output/notices.json".to_string(),
             },
             cleaning: CleaningConfig {
                 title_remove_patterns: vec!["첨부파일".to_string(), "공지 ".to_string()],
