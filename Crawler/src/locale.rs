@@ -27,19 +27,9 @@ pub fn load_locale_or_default<P: AsRef<Path>>(path: P) -> LocaleConfig {
 impl Default for LocaleConfig {
     fn default() -> Self {
         LocaleConfig {
-            cli: CliLocale {
-                description: "Fetch notices from university department websites".to_string(),
-                config_help: "Path to configuration file".to_string(),
-                site_map_help: "Override site map path".to_string(),
-                output_help: "Override output path".to_string(),
-                quiet_help: "Suppress console output".to_string(),
-            },
             messages: MessageLocale {
                 crawler_starting: "🕷️  uRing Crawler starting...\n".to_string(),
                 loaded_departments: "📋 Loaded {} department(s) with {} board(s)\n".to_string(),
-                department_header: "📂 {}".to_string(),
-                board_success: "   ✓ {} - {} notices".to_string(),
-                board_error: "   ✗ {} - Error: {}".to_string(),
                 total_notices: "\n📰 Total notices fetched: {}\n".to_string(),
                 saved_notices: "\n💾 Saved notices to {}".to_string(),
                 separator_line: "=".to_string(),
@@ -52,4 +42,4 @@ impl Default for LocaleConfig {
     }
 }
 
-use crate::models::config::{CliLocale, ErrorLocale, MessageLocale};
+use crate::models::config::{ErrorLocale, MessageLocale};

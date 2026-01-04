@@ -15,25 +15,8 @@ pub struct Config {
 /// Locale configuration structure
 #[derive(Debug, Deserialize, Clone)]
 pub struct LocaleConfig {
-    #[allow(dead_code)] // Reserved for future CLI localization
-    pub cli: CliLocale,
     pub messages: MessageLocale,
     pub errors: ErrorLocale,
-}
-
-/// CLI text localization
-#[derive(Debug, Deserialize, Clone)]
-pub struct CliLocale {
-    #[allow(dead_code)] // Reserved for future CLI description localization
-    pub description: String,
-    #[allow(dead_code)] // Reserved for future CLI help text localization
-    pub config_help: String,
-    #[allow(dead_code)] // Reserved for future CLI help text localization
-    pub site_map_help: String,
-    #[allow(dead_code)] // Reserved for future CLI help text localization
-    pub output_help: String,
-    #[allow(dead_code)] // Reserved for future CLI help text localization
-    pub quiet_help: String,
 }
 
 /// Message text localization
@@ -41,9 +24,6 @@ pub struct CliLocale {
 pub struct MessageLocale {
     pub crawler_starting: String,
     pub loaded_departments: String,
-    pub department_header: String,
-    pub board_success: String,
-    pub board_error: String,
     pub total_notices: String,
     pub saved_notices: String,
     pub separator_line: String,
@@ -62,7 +42,6 @@ pub struct CrawlerConfig {
     pub user_agent: String,
     pub timeout_secs: u64,
     pub request_delay_ms: u64,
-    #[allow(dead_code)] // Reserved for future concurrent crawling
     pub max_concurrent: usize,
 }
 

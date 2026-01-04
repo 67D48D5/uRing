@@ -1,6 +1,5 @@
 // src/utils/mod.rs
 
-pub mod url_utils;
-
-/// Re-export commonly used utilities
-pub use url_utils::*;
+pub mod fs_utils;
+pub mod text_utils;
+pub mod url;
