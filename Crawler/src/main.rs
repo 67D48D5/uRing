@@ -1,55 +1,40 @@
 // src/main.rs
 
-mod config;
-mod locale;
+mod error;
 mod models;
 mod services;
 mod utils;
 
 use clap::Parser;
 
-use std::error::Error;
 use std::sync::Arc;
 
-use crate::locale::load_locale_or_default;
-use crate::services::crawling::{Crawler, ReqwestHtmlFetcher};
-
+use crate::error::Result;
 use crate::models::config::{Config, LocaleConfig};
-use crate::models::crawler::Notice;
+use crate::models::crawler::{Campus, Notice};
+use crate::services::crawling::Crawler;
+use crate::utils::save_notices;
 
-use crate::utils::fs_utils::{load_campuses, save_notices_to_files};
-use crate::utils::text_utils::format_notice;
-
-// A simple struct to hold the parsed arguments
 #[derive(Parser, Debug)]
 #[command(version = "0.1.0", about = "A web crawler for university notices.")]
 struct Args {
-    #[arg(
-        short,
-        long,
-        default_value = "data/config.toml",
-        help = "Sets a custom config file"
-    )]
+    #[arg(short, long, default_value = "data/config.toml")]
     config: String,
 
-    #[arg(
-        long,
-        default_value = "data/locale.toml",
-        help = "Sets a custom locale file"
-    )]
+    #[arg(long, default_value = "data/locale.toml")]
     locale: String,
 
-    #[arg(long, help = "Overrides the site map path from the config")]
+    #[arg(long, help = "Override site map path")]
     site_map: Option<String>,
 
-    #[arg(short, long, help = "Overrides the output path from the config")]
+    #[arg(short, long, help = "Override output path")]
     output: Option<String>,
 
-    #[arg(short, long, action = clap::ArgAction::SetTrue, help = "Suppresses console output")]
+    #[arg(short, long, action = clap::ArgAction::SetTrue, help = "Suppress console output")]
     quiet: bool,
 }
 
-fn present_notices_to_console(notices: &[Notice], config: &Config, locale: &LocaleConfig) {
+fn print_notices(notices: &[Notice], config: &Config, locale: &LocaleConfig) {
     if !config.output.console_enabled {
         return;
     }
@@ -64,32 +49,24 @@ fn present_notices_to_console(notices: &[Notice], config: &Config, locale: &Loca
     println!("{:=<80}", locale.messages.separator_line);
 
     for notice in notices {
-        let formatted = format_notice(
-            &config.output.notice_format,
-            &notice.department_name,
-            &notice.board_name,
-            &notice.title,
-            &notice.date,
-            &notice.link,
-        );
-        println!("{}", formatted);
+        println!("{}", notice.format(&config.output.notice_format));
         println!("{:-<80}", locale.messages.separator_short);
     }
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> Result<()> {
     let args = Args::parse();
 
-    let locale = load_locale_or_default(&args.locale);
-    let mut config = Config::load_or_default(&args.config, &locale);
+    let locale = LocaleConfig::load_or_default(&args.locale);
+    let mut config = Config::load_or_default(&args.config);
 
     // Apply CLI overrides
-    if let Some(site_map) = args.site_map {
-        config.paths.site_map = site_map;
+    if let Some(ref path) = args.site_map {
+        config.paths.site_map = path.clone();
     }
-    if let Some(output) = args.output {
-        config.paths.output = output;
+    if let Some(ref path) = args.output {
+        config.paths.output = path.clone();
     }
     if args.quiet {
         config.output.console_enabled = false;
@@ -100,18 +77,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         print!("{}", locale.messages.crawler_starting);
     }
 
-    let campuses = load_campuses(&config.paths.site_map)?;
+    let campuses = Campus::load_all(&config.paths.site_map)?;
 
-    let total_boards: usize = campuses
-        .iter()
-        .map(|c| {
-            c.all_departments()
-                .iter()
-                .map(|(_, d)| d.boards.len())
-                .sum::<usize>()
-        })
-        .sum();
-    let total_depts: usize = campuses.iter().map(|c| c.all_departments().len()).sum();
+    let (total_depts, total_boards): (usize, usize) = campuses.iter().fold((0, 0), |(d, b), c| {
+        let deps = c.all_departments();
+        (
+            d + deps.len(),
+            b + deps.iter().map(|r| r.dept.boards.len()).sum::<usize>(),
+        )
+    });
 
     if config.logging.show_progress {
         println!(
@@ -124,14 +98,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         );
     }
 
-    let config_arc = Arc::new(config.clone());
-    let html_fetcher = Arc::new(ReqwestHtmlFetcher::new(&config));
-    let crawler = Crawler::new(config_arc.clone(), html_fetcher);
+    let crawler = Crawler::new(Arc::new(config.clone()));
+    let notices = crawler.fetch_all(&campuses).await?;
 
-    let notices = crawler.fetch_all_notices(&campuses).await?;
-
-    present_notices_to_console(&notices, &config, &locale);
-    save_notices_to_files(&notices, &config, &locale)?;
+    print_notices(&notices, &config, &locale);
+    save_notices(&notices, &config, &locale)?;
 
     Ok(())
 }
@@ -142,7 +113,7 @@ mod tests {
 
     #[test]
     fn test_args_parsing() {
-        let args = Args::parse_from(&["crawler", "--quiet"]);
+        let args = Args::parse_from(["crawler", "--quiet"]);
         assert!(args.quiet);
     }
 }

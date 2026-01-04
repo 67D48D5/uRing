@@ -1,12 +1,13 @@
 // src/models/crawler.rs
 
+use std::fs;
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
 
+use crate::error::Result;
+
 /// A campus containing colleges and/or departments
-/// The JSON structure can have either:
-/// - "colleges" array (with nested departments)
-/// - "departments" array (directly under campus)
-/// - Both
 #[derive(Deserialize, Debug, Clone)]
 pub struct Campus {
     pub campus: String,
@@ -17,24 +18,44 @@ pub struct Campus {
 }
 
 impl Campus {
-    /// Get all departments from this campus (both from colleges and direct departments)
-    pub fn all_departments(&self) -> Vec<(&str, &Department)> {
+    /// Load campus configurations from a JSON file
+    pub fn load_all(path: impl AsRef<Path>) -> Result<Vec<Self>> {
+        let content = fs::read_to_string(path)?;
+        Ok(serde_json::from_str(&content)?)
+    }
+
+    /// Get all departments with their college context
+    pub fn all_departments(&self) -> Vec<DepartmentRef<'_>> {
         let mut result = Vec::new();
 
-        // Add departments from colleges (with college name context)
         for college in &self.colleges {
             for dept in &college.departments {
-                result.push((college.name.as_str(), dept));
+                result.push(DepartmentRef {
+                    campus: &self.campus,
+                    college: Some(&college.name),
+                    dept,
+                });
             }
         }
 
-        // Add direct departments (no college context)
         for dept in &self.departments {
-            result.push(("", dept));
+            result.push(DepartmentRef {
+                campus: &self.campus,
+                college: None,
+                dept,
+            });
         }
 
         result
     }
+}
+
+/// Reference to a department with context
+#[derive(Debug, Clone, Copy)]
+pub struct DepartmentRef<'a> {
+    pub campus: &'a str,
+    pub college: Option<&'a str>,
+    pub dept: &'a Department,
 }
 
 /// A college containing multiple departments
@@ -44,27 +65,33 @@ pub struct College {
     pub departments: Vec<Department>,
 }
 
-/// A department/organization with multiple notice boards
+/// A department with multiple notice boards
 #[derive(Deserialize, Debug, Clone)]
 pub struct Department {
     pub id: String,
     pub name: String,
-    pub boards: Vec<BoardConfig>,
+    pub boards: Vec<Board>,
 }
 
 /// Configuration for a single notice board
 #[derive(Deserialize, Debug, Clone)]
-pub struct BoardConfig {
+pub struct Board {
     pub id: String,
     pub name: String,
     pub url: String,
     pub row_selector: String,
     pub title_selector: String,
     pub date_selector: String,
+    #[serde(default = "Board::default_attr")]
     pub attr_name: String,
-    /// Optional link selector (if different from title_selector)
     #[serde(default)]
     pub link_selector: Option<String>,
+}
+
+impl Board {
+    fn default_attr() -> String {
+        "href".into()
+    }
 }
 
 /// A notice fetched from a board
@@ -79,4 +106,16 @@ pub struct Notice {
     pub title: String,
     pub date: String,
     pub link: String,
+}
+
+impl Notice {
+    /// Format notice for display using a template
+    pub fn format(&self, template: &str) -> String {
+        template
+            .replace("{dept_name}", &self.department_name)
+            .replace("{board_name}", &self.board_name)
+            .replace("{title}", &self.title)
+            .replace("{date}", &self.date)
+            .replace("{link}", &self.link)
+    }
 }

@@ -1,211 +1,172 @@
 // src/services/crawling.rs
 
-use async_trait::async_trait;
-use futures::stream::{self, StreamExt};
-use tokio::sync::{Mutex, Semaphore};
-
-use reqwest::Client;
-use scraper::{Html, Selector};
-
-use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::stream::{self, StreamExt};
+use reqwest::Client;
+use scraper::{Html, Selector};
+use tokio::sync::Mutex;
+
 use crate::models::config::Config;
-use crate::models::crawler::{BoardConfig, Campus, Notice};
+use crate::models::crawler::{Board, Campus, DepartmentRef, Notice};
 
-use crate::utils::text_utils::{clean_date, clean_title};
-use crate::utils::url::resolve_url;
+use crate::error::{CrawlerError, Result};
+use crate::utils::resolve_url;
 
-#[async_trait]
-pub trait HtmlFetcher: Send + Sync {
-    async fn fetch(&self, url: &str) -> Result<String, Box<dyn Error + Send + Sync>>;
-}
-
-pub struct ReqwestHtmlFetcher {
+pub struct Crawler {
+    config: Arc<Config>,
     client: Client,
 }
 
-impl ReqwestHtmlFetcher {
-    pub fn new(config: &Config) -> Self {
+impl Crawler {
+    pub fn new(config: Arc<Config>) -> Self {
         let client = Client::builder()
             .user_agent(&config.crawler.user_agent)
             .timeout(Duration::from_secs(config.crawler.timeout_secs))
             .build()
             .expect("Failed to build HTTP client");
-        Self { client }
-    }
-}
 
-#[async_trait]
-impl HtmlFetcher for ReqwestHtmlFetcher {
-    async fn fetch(&self, url: &str) -> Result<String, Box<dyn Error + Send + Sync>> {
-        let html_content = self.client.get(url).send().await?.text().await?;
-        Ok(html_content)
-    }
-}
-
-pub struct Crawler<T: HtmlFetcher> {
-    config: Arc<Config>,
-    html_fetcher: Arc<T>,
-}
-
-struct BoardContext<'a> {
-    campus: &'a str,
-    college: &'a str,
-    department_id: &'a str,
-    department_name: &'a str,
-    board: &'a BoardConfig,
-    config: &'a Config,
-}
-
-impl<T: HtmlFetcher> Crawler<T> {
-    pub fn new(config: Arc<Config>, html_fetcher: Arc<T>) -> Self {
-        Self {
-            config,
-            html_fetcher,
-        }
+        Self { config, client }
     }
 
-    pub async fn fetch_all_notices(
-        &self,
-        campuses: &[Campus],
-    ) -> Result<Vec<Notice>, Box<dyn Error>> {
+    /// Fetch all notices from all campuses concurrently
+    pub async fn fetch_all(&self, campuses: &[Campus]) -> Result<Vec<Notice>> {
         let all_notices = Arc::new(Mutex::new(Vec::new()));
-        let semaphore = Arc::new(Semaphore::new(self.config.crawler.max_concurrent));
         let delay = Duration::from_millis(self.config.crawler.request_delay_ms);
 
-        let mut boards_to_crawl = Vec::new();
-        for campus in campuses {
-            for (college_name, dept) in campus.all_departments() {
-                for board in &dept.boards {
-                    boards_to_crawl.push((
-                        campus.campus.clone(),
-                        college_name.to_string(),
-                        dept.id.clone(),
-                        dept.name.clone(),
-                        board.clone(),
-                    ));
-                }
-            }
-        }
+        // Flatten all boards with their context
+        let tasks: Vec<_> = campuses
+            .iter()
+            .flat_map(|c| c.all_departments())
+            .flat_map(|dept_ref| {
+                dept_ref
+                    .dept
+                    .boards
+                    .iter()
+                    .map(move |board| (dept_ref, board))
+            })
+            .collect();
 
-        let concurrency = if self.config.crawler.max_concurrent == 0 {
-            1
-        } else {
-            self.config.crawler.max_concurrent
-        };
-        stream::iter(boards_to_crawl)
-            .for_each_concurrent(
-                concurrency,
-                |(campus_name, college_name, dept_id, dept_name, board)| {
-                    let html_fetcher = Arc::clone(&self.html_fetcher);
-                    let config = Arc::clone(&self.config);
-                    let all_notices = Arc::clone(&all_notices);
-                    let semaphore = Arc::clone(&semaphore);
+        let concurrency = self.config.crawler.max_concurrent.max(1);
 
-                    async move {
-                        let _permit = semaphore
-                            .acquire()
-                            .await
-                            .expect("Failed to acquire semaphore permit");
+        stream::iter(tasks)
+            .for_each_concurrent(concurrency, |(dept_ref, board)| {
+                let notices = Arc::clone(&all_notices);
+                let client = self.client.clone();
+                let config = Arc::clone(&self.config);
 
-                        let context = BoardContext {
-                            campus: &campus_name,
-                            college: &college_name,
-                            department_id: &dept_id,
-                            department_name: &dept_name,
-                            board: &board,
-                            config: &config,
-                        };
-
-                        match self
-                            .fetch_board_notices(html_fetcher.as_ref(), context)
-                            .await
-                        {
-                            Ok(notices) => {
-                                let mut all_notices_lock = all_notices.lock().await;
-                                all_notices_lock.extend(notices);
-                            }
-                            Err(e) => {
-                                eprintln!("Error fetching board {}: {}", board.name, e);
-                            }
+                async move {
+                    match Self::fetch_board(&client, &config, dept_ref, board).await {
+                        Ok(board_notices) => {
+                            notices.lock().await.extend(board_notices);
                         }
-
-                        if config.crawler.request_delay_ms > 0 {
-                            tokio::time::sleep(delay).await;
+                        Err(e) => {
+                            eprintln!(
+                                "Error fetching {}/{}: {}",
+                                dept_ref.dept.name, board.name, e
+                            );
                         }
                     }
-                },
-            )
+
+                    if delay.as_millis() > 0 {
+                        tokio::time::sleep(delay).await;
+                    }
+                }
+            })
             .await;
 
-        let notices = Arc::try_unwrap(all_notices)
-            .expect("Mutex still has multiple owners")
-            .into_inner();
-        Ok(notices)
+        Ok(Arc::try_unwrap(all_notices)
+            .expect("Arc still has multiple owners")
+            .into_inner())
     }
 
-    async fn fetch_board_notices(
-        &self,
-        html_fetcher: &dyn HtmlFetcher,
-        context: BoardContext<'_>,
-    ) -> Result<Vec<Notice>, Box<dyn Error + Send + Sync>> {
-        let html_content = html_fetcher.fetch(&context.board.url).await?;
-        let document = Html::parse_document(&html_content);
+    /// Fetch notices from a single board
+    async fn fetch_board(
+        client: &Client,
+        config: &Config,
+        dept_ref: DepartmentRef<'_>,
+        board: &Board,
+    ) -> Result<Vec<Notice>> {
+        let html = client.get(&board.url).send().await?.text().await?;
+        let document = Html::parse_document(&html);
 
-        let row_sel = Selector::parse(&context.board.row_selector)
-            .map_err(|e| format!("Invalid row selector: {}", e))?;
-        let title_sel = Selector::parse(&context.board.title_selector)
-            .map_err(|e| format!("Invalid title selector: {}", e))?;
-        let date_sel = Selector::parse(&context.board.date_selector)
-            .map_err(|e| format!("Invalid date selector: {}", e))?;
-        let base_url = url::Url::parse(&context.board.url)?;
+        let row_sel = Self::parse_selector(&board.row_selector)?;
+        let title_sel = Self::parse_selector(&board.title_selector)?;
+        let date_sel = Self::parse_selector(&board.date_selector)?;
+        let link_sel = board
+            .link_selector
+            .as_ref()
+            .map(|s| Self::parse_selector(s))
+            .transpose()?;
 
+        let base_url = url::Url::parse(&board.url)?;
         let mut notices = Vec::new();
 
         for row in document.select(&row_sel) {
-            let title_elem = row.select(&title_sel).next();
-            let date_elem = row.select(&date_sel).next();
+            let Some(title_elem) = row.select(&title_sel).next() else {
+                continue;
+            };
+            let Some(date_elem) = row.select(&date_sel).next() else {
+                continue;
+            };
 
-            if let (Some(t), Some(d)) = (title_elem, date_elem) {
-                let title = clean_title(
-                    &t.text().collect::<Vec<_>>().join(" "),
-                    &context.config.cleaning,
-                );
-                let date = clean_date(
-                    &d.text().collect::<Vec<_>>().join(" "),
-                    &context.config.cleaning,
-                );
+            let raw_title: String = title_elem.text().collect();
+            let raw_date: String = date_elem.text().collect();
 
-                let link_elem = if let Some(ref link_sel_str) = context.board.link_selector {
-                    let link_sel = Selector::parse(link_sel_str)
-                        .map_err(|e| format!("Invalid link selector: {}", e))?;
-                    row.select(&link_sel).next()
-                } else {
-                    Some(t)
-                };
+            let title = config.cleaning.clean_title(&raw_title);
+            let date = config.cleaning.clean_date(&raw_date);
 
-                let raw_link = link_elem
-                    .and_then(|e| e.value().attr(&context.board.attr_name))
-                    .unwrap_or("");
-                let link = resolve_url(&base_url, raw_link);
-
-                if !title.is_empty() {
-                    notices.push(Notice {
-                        campus: context.campus.to_string(),
-                        college: context.college.to_string(),
-                        department_id: context.department_id.to_string(),
-                        department_name: context.department_name.to_string(),
-                        board_id: context.board.id.clone(),
-                        board_name: context.board.name.clone(),
-                        title,
-                        date,
-                        link,
-                    });
-                }
+            if title.is_empty() {
+                continue;
             }
+
+            // Get link element (from link_selector or fallback to title element)
+            let link_elem = link_sel
+                .as_ref()
+                .and_then(|sel| row.select(sel).next())
+                .or(Some(title_elem));
+
+            let raw_link = link_elem
+                .and_then(|e| e.value().attr(&board.attr_name))
+                .unwrap_or("");
+
+            notices.push(Notice {
+                campus: dept_ref.campus.to_string(),
+                college: dept_ref.college.unwrap_or("").to_string(),
+                department_id: dept_ref.dept.id.clone(),
+                department_name: dept_ref.dept.name.clone(),
+                board_id: board.id.clone(),
+                board_name: board.name.clone(),
+                title,
+                date,
+                link: resolve_url(&base_url, raw_link),
+            });
         }
+
         Ok(notices)
+    }
+
+    fn parse_selector(s: &str) -> Result<Selector> {
+        Selector::parse(s).map_err(|e| CrawlerError::Selector {
+            selector: s.to_string(),
+            message: format!("{e:?}"),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_selector_valid() {
+        assert!(Crawler::parse_selector("div.class").is_ok());
+        assert!(Crawler::parse_selector("tr:has(a)").is_ok());
+    }
+
+    #[test]
+    fn test_parse_selector_invalid() {
+        assert!(Crawler::parse_selector("[[invalid").is_err());
     }
 }
