@@ -149,10 +149,10 @@ export default function Home() {
               <div className="brand-mark">uR</div>
               <div>
                 <div className="brand-tag">uRing Notice Desk</div>
-                <h1 className="hero-title">연세대학교 공지를 한 화면에</h1>
+                <h1 className="hero-title">연세대학교 공지 뷰어</h1>
                 <p className="hero-subtitle">
-                  캠퍼스, 학과, 게시판을 넘나드는 공지를 1분 단위로
-                  끌어와 실시간에 가깝게 정리합니다.
+                  캠퍼스, 학과, 게시판을 넘나드는 공지를 10분 단위로
+                  끌어와 실시간에 가깝게 정리.
                 </p>
               </div>
             </div>
