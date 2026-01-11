@@ -606,10 +606,10 @@ mod defaults {
         "data/output".into()
     }
     pub fn manual_review_file() -> String {
-        "tmp/manual_review_needed.json".into()
+        "Temp/manual_review_needed.json".into()
     }
     pub fn departments_file() -> String {
-        "tmp/yonsei_departments.json".into()
+        "Temp/yonsei_departments.json".into()
     }
     pub fn departments_boards_file() -> String {
         "siteMap.json".into()

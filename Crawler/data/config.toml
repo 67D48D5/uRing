@@ -30,8 +30,8 @@ seed = "data/seed.toml"
 output_dir = "data/output"
 
 # Output file names
-manual_review_file = "tmp/manual_review_needed.json"
-departments_file = "tmp/yonsei_departments.json"
+manual_review_file = "Temp/manual_review_needed.json"
+departments_file = "Temp/yonsei_departments.json"
 departments_boards_file = "siteMap.json"
 
 [cleaning]
