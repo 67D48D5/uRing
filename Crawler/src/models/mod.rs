@@ -1,3 +1,5 @@
+// src/models/mod.rs
+
 //! Domain models for the crawler application.
 //!
 //! This module contains all data structures used throughout the application,

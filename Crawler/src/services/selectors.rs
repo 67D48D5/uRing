@@ -1,3 +1,5 @@
+// src/services/selectors.rs
+
 //! CMS selector detection service.
 //!
 //! Detects the CMS type used by a website and returns appropriate CSS selectors.

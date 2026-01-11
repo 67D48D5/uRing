@@ -1,3 +1,5 @@
+// src/lambda/mod.rs
+
 //! AWS Lambda handler for the crawler.
 //!
 //! This module provides the Lambda function entry point that:
@@ -16,8 +18,8 @@ use tracing::{error, info, instrument};
 use crate::error::Result;
 use crate::models::{Campus, Config, Notice};
 use crate::services::NoticeCrawler;
-use crate::storage::s3::{detect_delta, S3Storage};
 use crate::storage::NoticeStorage;
+use crate::storage::s3::{S3Storage, detect_delta};
 
 /// Lambda invocation payload.
 #[derive(Debug, Deserialize)]
@@ -72,11 +74,16 @@ impl Default for CrawlResponse {
 
 /// Main Lambda handler function.
 #[instrument(skip(event))]
-pub async fn handler(event: LambdaEvent<CrawlRequest>) -> std::result::Result<CrawlResponse, LambdaError> {
+pub async fn handler(
+    event: LambdaEvent<CrawlRequest>,
+) -> std::result::Result<CrawlResponse, LambdaError> {
     let start = std::time::Instant::now();
     let (request, _context) = event.into_parts();
 
-    info!("Starting crawl: force_full={}, campus={:?}", request.force_full, request.campus);
+    info!(
+        "Starting crawl: force_full={}, campus={:?}",
+        request.force_full, request.campus
+    );
 
     match run_crawl(&request).await {
         Ok(mut response) => {
@@ -184,13 +191,10 @@ fn load_lambda_config() -> Result<Config> {
 }
 
 /// Load sitemap from S3 or embedded source.
-async fn load_sitemap(
-    _storage: &S3Storage,
-    campus_filter: Option<&str>,
-) -> Result<Vec<Campus>> {
+async fn load_sitemap(_storage: &S3Storage, campus_filter: Option<&str>) -> Result<Vec<Campus>> {
     // Try loading from S3 first
-    let sitemap_key = std::env::var("SITEMAP_S3_KEY")
-        .unwrap_or_else(|_| "uRing/config/sitemap.json".to_string());
+    let sitemap_key =
+        std::env::var("SITEMAP_S3_KEY").unwrap_or_else(|_| "uRing/config/sitemap.json".to_string());
 
     // For now, try to load from embedded or local path
     // In production, this would fetch from S3
@@ -201,7 +205,10 @@ async fn load_sitemap(
         Campus::load_all(&std::path::PathBuf::from(&sitemap_path))?
     } else {
         // TODO: Implement S3 sitemap loading
-        info!("Sitemap not found locally, expecting S3 source: {}", sitemap_key);
+        info!(
+            "Sitemap not found locally, expecting S3 source: {}",
+            sitemap_key
+        );
         Vec::new()
     };
 

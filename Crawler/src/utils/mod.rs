@@ -1,3 +1,5 @@
+// src/utils/mod.rs
+
 //! Utility functions and helpers.
 
 pub mod fs;

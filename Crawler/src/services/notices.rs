@@ -1,3 +1,5 @@
+// src/services/notices.rs
+
 //! Notice crawler service.
 //!
 //! Fetches notices from department boards using configured CSS selectors.

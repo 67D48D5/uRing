@@ -1,3 +1,5 @@
+// src/storage/s3.rs
+
 //! AWS S3 storage implementation.
 //!
 //! Implements the Delta-First approach for notice storage:
@@ -11,7 +13,7 @@ use tracing::{info, warn};
 
 use crate::error::{AppError, Result};
 use crate::models::Notice;
-use crate::storage::{paths, NoticeStorage, StorageMetadata};
+use crate::storage::{NoticeStorage, StorageMetadata, paths};
 
 /// S3-based notice storage implementing the Delta-First approach.
 pub struct S3Storage {
@@ -98,7 +100,12 @@ impl S3Storage {
                 ))
             })?;
 
-        info!("Wrote {} notices to s3://{}/{}", notices.len(), self.bucket, key);
+        info!(
+            "Wrote {} notices to s3://{}/{}",
+            notices.len(),
+            self.bucket,
+            key
+        );
         Ok(())
     }
 

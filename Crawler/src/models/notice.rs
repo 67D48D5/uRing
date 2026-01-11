@@ -1,3 +1,5 @@
+// src/models/notice.rs
+
 //! Notice data structure.
 
 use serde::{Deserialize, Serialize};

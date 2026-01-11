@@ -1,3 +1,5 @@
+// src/config.rs
+
 //! Configuration loading utilities.
 //!
 //! This module provides convenience functions for loading configuration
@@ -40,9 +42,8 @@ pub fn load_all(base_path: &Path) -> Result<(Config, Seed)> {
     let seed = load_seed(&seed_path)?;
 
     // Validate seed data
-    seed.validate().map_err(|e| {
-        AppError::config(format!("Invalid seed data: {e}"))
-    })?;
+    seed.validate()
+        .map_err(|e| AppError::config(format!("Invalid seed data: {e}")))?;
 
     Ok((config, seed))
 }

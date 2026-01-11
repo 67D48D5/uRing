@@ -1,3 +1,5 @@
+// src/models/campus.rs
+
 //! Campus, College, Department, and Board data structures.
 
 use std::fs;

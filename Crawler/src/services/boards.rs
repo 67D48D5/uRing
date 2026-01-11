@@ -1,3 +1,5 @@
+// src/services/boards.rs
+
 //! Board discovery service.
 //!
 //! Discovers notice boards on department websites by analyzing page content

@@ -1,3 +1,5 @@
+// src/utils/fs.rs
+
 //! File system utilities.
 
 use std::fs;

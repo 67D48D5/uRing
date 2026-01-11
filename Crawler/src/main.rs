@@ -1,13 +1,15 @@
 // src/main.rs
+
 //! uRing: Integrated University Notice Crawler CLI
 //!
 //! This is the main CLI entry point for local development and testing.
 //! For AWS Lambda deployment, use the `lambda` binary with the `lambda` feature.
 
-mod config;
-mod error;
 #[cfg(feature = "lambda")]
 mod lambda;
+
+mod config;
+mod error;
 mod models;
 mod services;
 mod storage;
@@ -33,6 +35,8 @@ use crate::utils::{
     version = "1.0.0",
     about = "Integrated University Notice Crawler"
 )]
+
+/// CLI Arguments
 struct Cli {
     #[arg(short, long, default_value = "data/config.toml")]
     config: String,
@@ -47,6 +51,7 @@ struct Cli {
     command: Command,
 }
 
+/// CLI Commands
 #[derive(Subcommand, Debug)]
 enum Command {
     /// Step 1: Discover departments and boards
@@ -63,6 +68,7 @@ enum Command {
     },
 }
 
+/// Main entry point
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -92,6 +98,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+/// Run the mapper to discover departments and boards.
 async fn run_mapper(config: &Config, base_path: &PathBuf) -> Result<()> {
     println!("🗺️  Starting Mapper Mode...");
 
@@ -180,6 +187,7 @@ async fn run_mapper(config: &Config, base_path: &PathBuf) -> Result<()> {
     Ok(())
 }
 
+/// Run the notice crawler.
 async fn run_crawler(config: &Config, locale: &LocaleConfig, base_path: &PathBuf) -> Result<()> {
     if config.logging.show_progress {
         print!("{}", locale.messages.crawler_starting);
@@ -216,6 +224,7 @@ async fn run_crawler(config: &Config, locale: &LocaleConfig, base_path: &PathBuf
     Ok(())
 }
 
+/// Print notices to console in formatted manner.
 fn print_notices(notices: &[Notice], config: &Config, locale: &LocaleConfig) {
     if !config.output.console_enabled {
         return;

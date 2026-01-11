@@ -3,7 +3,7 @@ name = "crawler"
 version = "0.1.0"
 description = "Crawls Yonsei University website to discover announcement boards"
 
-# Set Rust edition to 2024
+# Set Rust edition to 2024 edition
 edition = "2024"
 
 [[bin]]
@@ -12,7 +12,7 @@ path = "src/main.rs"
 
 [[bin]]
 name = "lambda"
-path = "src/lambda_main.rs"
+path = "src/lambda.rs"
 
 [features]
 default = []
@@ -66,4 +66,4 @@ tracing = "^0.1"
 tracing-subscriber = { version = "^0.3", features = ["env-filter", "json"] }
 
 [dev-dependencies]
-tempfile = "3.24.0"
+tempfile = "^3.24"

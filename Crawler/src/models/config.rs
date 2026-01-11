@@ -1,3 +1,5 @@
+// src/models/config.rs
+
 //! Application configuration structures.
 
 use std::fs;
@@ -6,10 +8,6 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::error::Result;
-
-// ============================================================================
-// Main Configuration
-// ============================================================================
 
 /// Root application configuration.
 #[derive(Debug, Clone, Deserialize)]
@@ -99,10 +97,6 @@ impl Default for Config {
     }
 }
 
-// ============================================================================
-// Crawler Settings
-// ============================================================================
-
 /// HTTP client and crawling behavior settings.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CrawlerConfig {
@@ -138,10 +132,6 @@ impl Default for CrawlerConfig {
         }
     }
 }
-
-// ============================================================================
-// Path Settings
-// ============================================================================
 
 /// File path configurations.
 #[derive(Debug, Clone, Deserialize)]
@@ -184,10 +174,6 @@ impl Default for PathsConfig {
     }
 }
 
-// ============================================================================
-// Discovery Settings
-// ============================================================================
-
 /// Board discovery settings.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DiscoveryConfig {
@@ -208,10 +194,6 @@ impl Default for DiscoveryConfig {
         }
     }
 }
-
-// ============================================================================
-// Cleaning Settings
-// ============================================================================
 
 /// Text cleaning/preprocessing settings.
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -267,10 +249,6 @@ pub struct Replacement {
     pub to: String,
 }
 
-// ============================================================================
-// Output Settings
-// ============================================================================
-
 /// Output format settings.
 #[derive(Debug, Clone, Deserialize)]
 pub struct OutputConfig {
@@ -302,10 +280,6 @@ impl Default for OutputConfig {
     }
 }
 
-// ============================================================================
-// Logging Settings
-// ============================================================================
-
 /// Logging settings.
 #[derive(Debug, Clone, Deserialize)]
 pub struct LoggingConfig {
@@ -326,10 +300,6 @@ impl Default for LoggingConfig {
         }
     }
 }
-
-// ============================================================================
-// Locale Configuration
-// ============================================================================
 
 /// Internationalization/localization settings.
 #[derive(Debug, Clone, Deserialize)]
@@ -411,10 +381,6 @@ pub struct Errors {
     #[serde(default = "defaults::err_config_load")]
     pub config_load_failed: String,
 }
-
-// ============================================================================
-// Default Values Module
-// ============================================================================
 
 mod defaults {
     // Crawler defaults

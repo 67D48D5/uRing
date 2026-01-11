@@ -1,3 +1,5 @@
+// src/services/departments.rs
+
 //! Department crawler service.
 //!
 //! Crawls campus pages to discover departments and their homepage URLs.
@@ -70,11 +72,7 @@ impl<'a> DepartmentCrawler<'a> {
         document.select(&main_selector).next()
     }
 
-    fn group_into_colleges(
-        &self,
-        campus: &mut Campus,
-        dept_info: Vec<(String, String, String)>,
-    ) {
+    fn group_into_colleges(&self, campus: &mut Campus, dept_info: Vec<(String, String, String)>) {
         for (college_name, dept_name, dept_url) in dept_info {
             // Find or create college
             let college_idx = campus

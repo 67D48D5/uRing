@@ -1,3 +1,5 @@
+// src/models/selectors.rs
+
 //! CSS selectors for scraping board pages.
 
 use serde::{Deserialize, Serialize};

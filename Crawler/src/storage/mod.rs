@@ -1,3 +1,5 @@
+// src/storage/mod.rs
+
 //! Storage abstractions for notice persistence.
 //!
 //! This module provides a unified interface for storing notices,
@@ -27,10 +29,8 @@ pub struct StorageMetadata {
 /// Trait for notice storage backends.
 pub trait NoticeStorage {
     /// Store notices in the "New" directory (hot data for notifications).
-    fn store_new(
-        &self,
-        notices: &[Notice],
-    ) -> impl Future<Output = Result<StorageMetadata>> + Send;
+    fn store_new(&self, notices: &[Notice])
+    -> impl Future<Output = Result<StorageMetadata>> + Send;
 
     /// Rotate notices from "New" to monthly archive.
     fn rotate_to_archive(&self) -> impl Future<Output = Result<StorageMetadata>> + Send;

@@ -1,3 +1,5 @@
+// src/services/mod.rs
+
 //! Service layer for the crawler application.
 //!
 //! This module contains the business logic for:

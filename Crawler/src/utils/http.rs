@@ -1,3 +1,5 @@
+// src/utils/http.rs
+
 //! HTTP client utilities.
 
 use std::time::Duration;

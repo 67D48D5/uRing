@@ -1,3 +1,5 @@
+// src/lambda.rs
+
 //! Lambda entry point for uRing Crawler.
 //!
 //! This binary is designed to run on AWS Lambda with a 1-minute cron trigger.
