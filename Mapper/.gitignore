@@ -1,8 +1,0 @@
-# `.gitignore` for `Mapper` project
-
-# Rust build artifacts
-/target/
-Cargo.lock
-
-# Mapped data
-/data/output/*.json

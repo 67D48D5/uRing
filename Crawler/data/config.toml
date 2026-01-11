@@ -1,4 +1,4 @@
-# uRing Crawler Configuration
+# Crawler Configuration
 
 [crawler]
 # User agent string for HTTP requests
@@ -10,6 +10,9 @@ timeout_secs = 30
 # Delay between requests in milliseconds (to be polite to servers)
 request_delay_ms = 100
 
+# Timeout for sitemap/secondary requests
+sitemap_timeout_secs = 5
+
 # Maximum concurrent requests (0 = sequential)
 max_concurrent = 5
 
@@ -19,6 +22,17 @@ site_map = "data/siteMap.json"
 
 # Path to output directory (will create department subdirectories with board JSON files)
 output = "data/output"
+
+# Seed configuration file (campuses and keywords)
+seed = "data/seed.toml"
+
+# Output directory
+output_dir = "data/output"
+
+# Output file names
+departments_file = "yonsei_departments.json"
+departments_boards_file = "yonsei_departments_boards.json"
+manual_review_file = "manual_review_needed.json"
 
 [cleaning]
 # Patterns to remove from titles
@@ -52,3 +66,17 @@ level = "info"
 
 # Show progress indicators
 show_progress = true
+
+[discovery]
+# Maximum text length for board link names (longer = likely article title)
+max_board_name_length = 20
+
+# Patterns that indicate an article view (not a board listing)
+blacklist_patterns = [
+    "articleNo",
+    "article_no",
+    "mode=view",
+    "seq",
+    "view.do",
+    "board_seq",
+]

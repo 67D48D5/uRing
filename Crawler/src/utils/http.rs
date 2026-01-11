@@ -6,24 +6,25 @@ use reqwest::blocking::Client;
 use scraper::Html;
 
 use crate::error::Result;
-use crate::models::HttpConfig;
+use crate::models::CrawlerConfig;
 
-/// Create a configured HTTP client
-pub fn create_client(config: &HttpConfig) -> Result<Client> {
-    Ok(Client::builder()
+/// Create a configured blocking HTTP client.
+pub fn create_client(config: &CrawlerConfig) -> Result<Client> {
+    let client = Client::builder()
         .user_agent(&config.user_agent)
         .timeout(Duration::from_secs(config.timeout_secs))
-        .build()?)
+        .build()?;
+    Ok(client)
 }
 
-/// Fetch a page and return the HTML document
+/// Fetch a page and parse it as HTML.
 pub fn fetch_page(client: &Client, url: &str) -> Result<Html> {
     let response = client.get(url).send()?;
     let text = response.text()?;
     Ok(Html::parse_document(&text))
 }
 
-/// Fetch a page with a custom timeout
+/// Fetch a page with a custom timeout.
 pub fn fetch_page_with_timeout(client: &Client, url: &str, timeout_secs: u64) -> Result<Html> {
     let response = client
         .get(url)
