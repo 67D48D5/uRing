@@ -77,8 +77,8 @@ impl LocalStorage {
 
     fn archive_path(&self, year: i32, month: u32) -> PathBuf {
         self.base_path
-            .join(format!("{:04}-{:02}", year, month))
-            .join("notices.json")
+            .join("Stack")
+            .join(format!("{:04}-{:02}", year, month).to_string() + ".json")
     }
 }
 
@@ -147,6 +147,17 @@ impl NoticeStorage for LocalStorage {
 pub mod paths {
     use chrono::{DateTime, Utc};
 
+    /// Get the campus-specific prefix (e.g., `uRing/신촌캠퍼스`).
+    pub fn campus_prefix(bucket_prefix: &str, campus: &str) -> String {
+        let base = bucket_prefix.trim_end_matches('/');
+        let campus = campus.trim_matches('/');
+        if campus.is_empty() {
+            base.to_string()
+        } else {
+            format!("{}/{}", base, campus)
+        }
+    }
+
     /// Get the S3 key for the "New" directory notices file.
     pub fn new_notices_key(bucket_prefix: &str) -> String {
         format!("{}/New/notices.json", bucket_prefix.trim_end_matches('/'))
@@ -182,6 +193,13 @@ mod tests {
     fn test_new_notices_key() {
         assert_eq!(new_notices_key("uRing"), "uRing/New/notices.json");
         assert_eq!(new_notices_key("uRing/"), "uRing/New/notices.json");
+    }
+
+    #[test]
+    fn test_campus_prefix() {
+        assert_eq!(campus_prefix("uRing", "CampusA"), "uRing/CampusA");
+        assert_eq!(campus_prefix("uRing/", "/CampusA"), "uRing/CampusA");
+        assert_eq!(campus_prefix("uRing/", ""), "uRing");
     }
 
     #[test]

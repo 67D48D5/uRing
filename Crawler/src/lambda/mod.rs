@@ -9,9 +9,11 @@
 //! 4. Stores new notices to S3 New/ directory
 //! 5. Rotates previous New/ to monthly archive
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use lambda_runtime::{Error as LambdaError, LambdaEvent};
+
 use serde::{Deserialize, Serialize};
 use tracing::{error, info, instrument};
 
@@ -19,7 +21,7 @@ use crate::error::Result;
 use crate::models::{Campus, Config, Notice};
 use crate::services::NoticeCrawler;
 use crate::storage::NoticeStorage;
-use crate::storage::s3::{S3Storage, detect_delta};
+use crate::storage::s3::S3Storage;
 
 /// Lambda invocation payload.
 #[derive(Debug, Deserialize)]
@@ -131,8 +133,13 @@ async fn run_crawl(request: &CrawlRequest) -> Result<CrawlResponse> {
 
     // Step 1: Rotate existing New/ to archive (before overwriting)
     let archived_count = if !request.skip_rotation {
-        let meta = storage.rotate_to_archive().await?;
-        meta.notice_count
+        let mut archived = 0;
+        for campus in &campuses {
+            let campus_storage = storage.with_campus(&campus.campus);
+            let meta = campus_storage.rotate_to_archive().await?;
+            archived += meta.notice_count;
+        }
+        archived
     } else {
         0
     };
@@ -151,7 +158,18 @@ async fn run_crawl(request: &CrawlRequest) -> Result<CrawlResponse> {
     };
 
     // Step 4: Store to New/
-    storage.store_new(&new_notices).await?;
+    let mut notices_by_campus: HashMap<String, Vec<Notice>> = HashMap::new();
+    for notice in &new_notices {
+        notices_by_campus
+            .entry(notice.campus.clone())
+            .or_default()
+            .push(notice.clone());
+    }
+
+    for (campus, notices) in notices_by_campus {
+        let campus_storage = storage.with_campus(&campus);
+        campus_storage.store_new(&notices).await?;
+    }
 
     Ok(CrawlResponse {
         success: true,
@@ -191,20 +209,21 @@ fn load_lambda_config() -> Result<Config> {
 }
 
 /// Load sitemap from S3 or embedded source.
-async fn load_sitemap(_storage: &S3Storage, campus_filter: Option<&str>) -> Result<Vec<Campus>> {
-    // Try loading from S3 first
+async fn load_sitemap(storage: &S3Storage, campus_filter: Option<&str>) -> Result<Vec<Campus>> {
     let sitemap_key =
         std::env::var("SITEMAP_S3_KEY").unwrap_or_else(|_| "uRing/config/sitemap.json".to_string());
 
-    // For now, try to load from embedded or local path
-    // In production, this would fetch from S3
     let sitemap_path = std::env::var("SITEMAP_PATH")
         .unwrap_or_else(|_| "data/output/yonsei_departments_boards.json".to_string());
 
-    let campuses = if std::path::Path::new(&sitemap_path).exists() {
+    let campuses = if let Some(campuses) = storage
+        .read_json_optional::<Vec<Campus>>(&sitemap_key)
+        .await?
+    {
+        campuses
+    } else if std::path::Path::new(&sitemap_path).exists() {
         Campus::load_all(&std::path::PathBuf::from(&sitemap_path))?
     } else {
-        // TODO: Implement S3 sitemap loading
         info!(
             "Sitemap not found locally, expecting S3 source: {}",
             sitemap_key

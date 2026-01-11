@@ -3,12 +3,14 @@
 //! AWS S3 storage implementation.
 //!
 //! Implements the Delta-First approach for notice storage:
-//! - New notices are stored in `{bucket}/New/notices.json`
-//! - On rotation, content is moved to monthly archive `{bucket}/YYYY-MM/notices.json`
+//! - New notices are stored in `{bucket}/{campus}/New/notices.json`
+//! - On rotation, content is moved to monthly archive `{bucket}/{campus}/YYYY-MM/notices.json`
 
 use aws_sdk_s3::Client;
 use aws_sdk_s3::primitives::ByteStream;
+
 use chrono::{DateTime, Utc};
+use serde::de::DeserializeOwned;
 use tracing::{info, warn};
 
 use crate::error::{AppError, Result};
@@ -32,6 +34,16 @@ impl S3Storage {
         }
     }
 
+    /// Create a new storage instance scoped to a campus-specific prefix.
+    pub fn with_campus(&self, campus: &str) -> Self {
+        let campus_prefix = paths::campus_prefix(&self.prefix, campus);
+        Self {
+            client: self.client.clone(),
+            bucket: self.bucket.clone(),
+            prefix: campus_prefix,
+        }
+    }
+
     /// Create S3 storage from environment configuration.
     pub async fn from_env() -> Result<Self> {
         let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
@@ -43,8 +55,8 @@ impl S3Storage {
         Ok(Self::new(client, bucket, prefix))
     }
 
-    /// Read JSON from S3.
-    async fn read_json(&self, key: &str) -> Result<Vec<Notice>> {
+    /// Read JSON from S3, returning None if the key does not exist.
+    pub async fn read_json_optional<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {
         let result = self
             .client
             .get_object()
@@ -61,15 +73,14 @@ impl S3Storage {
                         e.to_string(),
                     ))
                 })?;
-                let notices: Vec<Notice> = serde_json::from_slice(&bytes.into_bytes())?;
-                Ok(notices)
+                let value: T = serde_json::from_slice(&bytes.into_bytes())?;
+                Ok(Some(value))
             }
             Err(err) => {
-                // Check if it's a "not found" error
                 let service_err = err.into_service_error();
                 if service_err.is_no_such_key() {
                     info!("No existing data at s3://{}/{}", self.bucket, key);
-                    Ok(Vec::new())
+                    Ok(None)
                 } else {
                     Err(AppError::Io(std::io::Error::new(
                         std::io::ErrorKind::Other,
@@ -78,6 +89,14 @@ impl S3Storage {
                 }
             }
         }
+    }
+
+    /// Read notices JSON from S3.
+    async fn read_json(&self, key: &str) -> Result<Vec<Notice>> {
+        Ok(self
+            .read_json_optional::<Vec<Notice>>(key)
+            .await?
+            .unwrap_or_default())
     }
 
     /// Write JSON to S3.
