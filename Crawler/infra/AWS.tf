@@ -12,12 +12,12 @@ variable "bucket_name" {
 
 variable "s3_prefix" {
   type    = string
-  default = "uRing"
+  default = ""
 }
 
 variable "sitemap_s3_key" {
   type    = string
-  default = "uRing/config/sitemap.json"
+  default = "config/sitemap.json"
 }
 
 variable "lambda_zip_path" {
@@ -27,7 +27,7 @@ variable "lambda_zip_path" {
 
 variable "schedule_expression" {
   type    = string
-  default = "rate(1 minute)"
+  default = "rate(10 minutes)"
 }
 
 # Set AWS Provider
@@ -85,10 +85,10 @@ resource "aws_iam_role_policy_attachment" "lambda_basic_execution" {
 resource "aws_lambda_function" "crawler_func" {
   function_name = "yonsei-crawler-lambda"
   role          = aws_iam_role.lambda_exec.arn
-  handler       = "bootstrap"     # Rust Lambda always uses bootstrap
-  runtime       = "provided.al2"  # Amazon Linux 2 (Custom Runtime)
-  architectures = ["arm64"]       # Graviton2 (cost saving)
-  timeout       = 60              # Adjust based on crawling time
+  handler       = "bootstrap"         # Rust Lambda always uses bootstrap
+  runtime       = "provided.al2023"   # Amazon Linux 2023 (Custom Runtime)
+  architectures = ["arm64"]           # Graviton Processor (cost saving)
+  timeout       = 120                 # Adjust based on crawling time
 
   # Built Zip file path (moved to this path by GitHub Actions)
   filename         = var.lambda_zip_path
