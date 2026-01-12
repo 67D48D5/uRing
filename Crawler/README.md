@@ -1,6 +1,6 @@
 # Crawler
 
-This document describes the internal architecture of the uRing Crawler, a serverless Rust-based crawler designed to ingest, deduplicate, and persist university notice data in a scalable and production-safe manner.
+This document describes the internal architecture of the uRing Crawler, a serverless Rust-based crawler designed to ingest, deduplicate, and persist university notice data in a scalable and production-ready manner.
 
 ## Table of Contents
 
@@ -31,7 +31,7 @@ The crawler architecture is guided by the following principles:
 
 ## High-Level Architecture
 
-```code
+```text
 [ EventBridge (10 min) ]
           |
           v
@@ -46,7 +46,7 @@ The crawler architecture is guided by the following principles:
 
 ## Data Ingestion Pipeline
 
-- The crawler is triggered on a 1-minute interval using Amazon EventBridge.
+- The crawler is triggered on a 10-minute interval using Amazon EventBridge.
 - Each execution fetches notices from configured department boards based on a predefined sitemap.
 - Crawling is idempotent at the notice level using a canonical notice identifier.
 - The crawler does not maintain any in-memory or persistent state between executions.
@@ -57,7 +57,7 @@ The crawler architecture is guided by the following principles:
 
 All data is stored under a single logical namespace: uRing/.
 
-```code
+```text
 uRing/
  ├─ config/
  │   └─ sitemap.json
@@ -88,16 +88,18 @@ uRing/
 ### Snapshot Generation (Read-Optimized Views)
 
 - During each crawl cycle, the crawler aggregates newly discovered notices into a snapshot file:
-- uRing/{campus}/snapshots/{timestamp}.json
+  - uRing/{campus}/snapshots/{timestamp}.json
 - Snapshots are optimized for read simplicity, not write performance.
-- Snapshots represent the current “hot view” of recent notices for a campus.
+- Snapshots represent the current `hot delta view` for a campus.
 
 ### Pointer-Based Atomic Rotation (Delta-First)
+
+Delta-first means the notification system consumes only the latest “new notices” snapshot (hot view), while the full history remains in append-only event storage.
 
 To support notification workflows without relying on non-atomic S3 directory operations:
 
 - A small pointer file is maintained:
-- uRing/{campus}/new.pointer.json
+  - uRing/{campus}/new.pointer.json
 - The pointer contains only the S3 key of the latest snapshot.
 - Consumers:
 
@@ -109,6 +111,8 @@ To support notification workflows without relying on non-atomic S3 directory ope
 This replaces directory move/overwrite patterns and avoids intermediate inconsistent states.
 
 ## Canonical Notice Identification
+
+> The identifier can be implemented as a stable hash (e.g., SHA-256) over normalized attributes.
 
 Each notice is assigned a canonical, deterministic identifier derived from stable attributes such as:
 
@@ -132,19 +136,20 @@ This ensures:
 ## Retention & Lifecycle Management
 
 - S3 lifecycle rules are applied per prefix:
-- events/: long-term retention
-- snapshots/: short to medium retention
+  - events/: long-term retention
+  - snapshots/: short to medium retention
 - Old snapshots can be safely expired without affecting historical data.
 - Pointer files always reference a valid snapshot.
 
 ## Deployment Model
 
-- The crawler runs as an AWS Lambda (ARM64) binary built using cargo lambda.
+- The crawler runs as an AWS Lambda (ARM64) binary built using `cargo lambda`.
 - Infrastructure is managed via Terraform.
 - No persistent compute or database is required.
 
 ## Future Extensions
 
+- Snapshots are short-lived and can be expired aggressively (e.g., 7–30 days), since the source of truth is the event log.
 - Detail page scraping with HTML content cached alongside notice events
 - Change detection at the content level (diff-based updates)
 - Downstream fan-out via SQS/SNS for large-scale notification delivery
