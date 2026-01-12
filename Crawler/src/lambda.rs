@@ -1,4 +1,4 @@
-// src/lambda_main.rs
+// src/lambda.rs
 
 //! Lambda entry point for uRing Crawler.
 //!
@@ -47,7 +47,7 @@ async fn main() -> Result<(), lambda_runtime::Error> {
     tracing::info!("uRing Lambda Crawler starting...");
 
     // Run Lambda handler
-    lambda_runtime::run(service_fn(lambda::handler)).await
+    lambda_runtime::run(service_fn(handler::handler)).await
 }
 
 #[cfg(not(feature = "lambda"))]

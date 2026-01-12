@@ -1,4 +1,4 @@
-// src/lambda/mod.rs
+// src/handler.rs
 
 //! AWS Lambda handler for the crawler.
 //!
