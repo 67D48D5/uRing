@@ -150,7 +150,7 @@ pub fn sub_item(message: &str) {
 /// Log a summary section
 pub fn summary(title: &str, items: &[(&str, String)]) {
     if should_log(LogLevel::Info) {
-        println!(); // 가독성을 위한 빈 줄
+        println!(); // Empty line for spacing
 
         // Print title
         let title_msg = format!("[SUMMARY] {}", title);

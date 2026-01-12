@@ -198,7 +198,9 @@ impl LocalStorage {
                 continue;
             }
 
-            let campus_dir = path.join("events").join(format!("{:04}-{:02}", year, month));
+            let campus_dir = path
+                .join("events")
+                .join(format!("{:04}-{:02}", year, month));
             notices.extend(self.load_events_from_dir(&campus_dir)?);
         }
 
