@@ -1,156 +1,162 @@
-# Crawler
+# uRing Crawler
 
-This document describes the internal architecture of the **uRing Crawler**, a serverless Rust-based crawler designed to ingest, deduplicate, and persist university notice data in a scalable and production-ready manner.
+This document describes the internal architecture of the **uRing Crawler**, a serverless, event-driven system designed to ingest university notice data. This version introduces **Content-Addressable Storage (CAS)** and a **Fan-Out/Fan-In** execution model to maximize deduplication, concurrency, and fault tolerance.
 
 ## Table of Contents
 
 * [Design Principles](#design-principles)
 * [High-Level Architecture](#high-level-architecture)
-* [Data Ingestion Pipeline](#data-ingestion-pipeline)
-* [Storage Strategy](#storage-strategy)
-      - [S3 Bucket Layout (Snapshot-based)](#s3-bucket-layout-snapshot-based)
-      - [Versioned Snapshot Generation](#versioned-snapshot-generation)
-      - [Data Components](#data-components)
-      - [Pointer-Based Atomic Rotation](#pointer-based-atomic-rotation)
-      - [Cache Optimization](#cache-optimization)
-* [Canonical Notice Identification](#canonical-notice-identification)
-* [Concurrency & Idempotency](#concurrency--idempotency)
-* [Retention & Lifecycle Management](#retention--lifecycle-management)
-* [Deployment Model](#deployment-model)
-* [Future Extensions](#future-extensions)
+* [The Fan-Out Ingestion Pipeline](#the-fan-out-ingestion-pipeline)
+* [Storage Strategy: CAS & Deduplication](#storage-strategy-cas--deduplication)
+  * [The Blob Store (Content)](#the-blob-store-content)
+  * [The Snapshot Layer (Structure)](#the-snapshot-layer-structure)
+  * [Data Components](#data-components)
+* [Resilience & Error Handling](#resilience--error-handling)
+* [Security & Access Control](#security--access-control)
+* [Search Integration](#search-integration)
 * [Summary](#summary)
 
 ## Design Principles
 
-The crawler architecture is guided by the following principles:
-
-* **Stateless Execution**: Optimized for AWS Lambda with no local state dependency.
-* **Snapshot-based Persistence**: Each crawl result is stored as a versioned, immutable snapshot.
-* **Delta-first Data Flow**: Designed to easily identify and broadcast new notices.
-* **Structured Retrieval**: Clear separation between index, metadata, and detail data.
-* **Operational Simplicity**: Using S3 as a structured database for high availability and low cost.
+* **Content-Addressable Persistence**: Data is stored based on its content hash (SHA-256), not its location. This eliminates 99% of redundant writes.
+* **Asynchronous Fan-Out**: Crawl jobs are distributed across concurrent workers via queues, decoupled from the scheduling logic.
+* **Partial Availability**: The system is designed to succeed even if specific target sites fail. Errors are cataloged, not fatal.
+* **Edge-First Delivery**: All reads are served via a CDN (CloudFront) with aggressive caching policies.
 
 ## High-Level Architecture
 
+The system moves from a monolithic Lambda to a distributed **Orchestrator-Worker-Aggregator** pattern.
+
 ```text
-[ EventBridge (10 min) ]
+[ EventBridge (Cron) ]
           |
           v
-[ Lambda Crawler ]
-          |
-          v
-[ S3 (Structured Snapshots + Version Pointer) ]
-          |
-          v
-[ Consumer (API / App / Notification Service) ]
+[ Orchestrator Lambda ] --(Batch Jobs)--> [ SQS FIFO Queue ]
+                                                 |
+                                                 v
+                                        [ Worker Lambdas (Scale n...) ]
+                                                 | (Write Blobs & Fragments)
+                                                 v
+                                        [ S3 (Staging & Blob Store) ]
+                                                 |
+                                         (Event / Finalize)
+                                                 v
+                                        [ Aggregator Lambda ]
+                                                 |
+                                                 v
+                                        [ S3 (Final Indices & Pointer) ]
 
 ```
 
-## Data Ingestion Pipeline
+## The Fan-Out Ingestion Pipeline
 
-* The crawler is triggered on a 10-minute interval using **Amazon EventBridge**.
-* Each execution fetches notices from configured department boards based on a predefined **siteMap**.
-* Crawling is idempotent at the notice level using a canonical notice identifier.
-* Results are bundled into a new `{version}` directory, representing a consistent state of the system at that time.
+The crawl cycle is broken down into three distinct phases to ensure scalability:
 
-## Storage Strategy
+### 1. The Orchestrator (Scheduling)
 
-### S3 Bucket Layout (Snapshot-based)
+* **Trigger**: Runs every 10 minutes via EventBridge.
+* **Responsibility**: Reads the `siteMap.json`. It does **not** fetch external websites.
+* **Action**: Splits the sitemap into discrete "Job Messages" (e.g., `Crawl { Dept: CS, URL: ... }`) and pushes them to an Amazon SQS FIFO queue to ensure exactly-once delivery.
 
-All data is organized under versioned snapshots to ensure atomicity and consistency for consumers.
+### 2. The Workers (Execution)
+
+* **Trigger**: SQS Lambda Event Source Mapping (scales automatically based on queue depth).
+* **Responsibility**:
+
+1. Fetch HTML from the target URL.
+2. Parse notices.
+3. Compute **SHA-256 Hash** of the notice body.
+4. **CAS Check**: If `blobs/sha256/{hash}.json` exists, skip writing the body. If not, write it.
+5. Write a lightweight **Notice Fragment** (metadata + hash reference) to a temporary staging area in S3.
+
+### 3. The Aggregator (Commit)
+
+* **Trigger**: Triggered once the SQS queue is drained or by a "EndOfBatch" message.
+* **Responsibility**:
+
+1. Reads all Notice Fragments from the staging area.
+2. Generates the aggregate `index/` files and `aux/diff.json`.
+3. Writes the versioned snapshot.
+4. Updates the `latest.json` pointer to make the new data live.
+
+## Storage Strategy: CAS & Deduplication
+
+We separate the **Content** (Heavy, rarely changes) from the **Structure** (Light, changes often).
+
+### The Blob Store (Content)
+
+This directory acts as a global database of unique notices. Files here are never deleted (unless via long-term lifecycle policies) and never overwritten.
 
 ```shell
-config/
- ├─ config.toml                 # Crawler runtime configuration
- ├─ seed.toml                   # Crawler seed URLs and parameters
- └─ siteMap.json                # Crawler configuration used for this version
+blobs/
+ └─ sha256/
+     ├─ a1b2...e4.json   # Actual content of a notice
+     ├─ c9d8...f1.json   # Content of another notice
+     └─ ...
 
-snapshots/{version}/
- ├── index/
- │    ├── all.json              # Global index of all active notices
- │    ├── campus/
- │    │    ├── seoul.json       # Campus-specific indices
- │    │    └── mirae.json
- │    └── category/
- │         └── academic.json    # Category-specific indices
- ├── meta/
- │    ├── campus.json           # Valid campus metadata
- │    ├── category.json         # Valid category metadata
- │    └── source.json           # Data source/origin mapping
- ├── detail/
- │    └── {noticeId}.json       # Full content of individual notices
- └── aux/
-      ├── diff.json             # Changes compared to the previous version (the "Delta")
-      └── stats.json            # Crawl statistics (count, latency, success rate)
 ```
 
-### Versioned Snapshot Generation
+### The Snapshot Layer (Structure)
 
-During each crawl cycle, the crawler generates a new `{version}` (typically a timestamp or UUID).
+Snapshots now act as **Manifests**. They map canonical IDs to Content Hashes. This makes the snapshots incredibly small and fast to generate.
 
-* **Consistency**: All files within a version are guaranteed to be mutually consistent.
-* **Immutability**: Once a version is written, it is never modified.
-* **Granularity**: Consumers can choose to fetch only the `index/` for lists or `detail/` for specific content.
+```shell
+snapshots/{version}/
+ ├── index/
+ │    ├── all.json       # List: [{ "id": 101, "title": "...", "content_hash": "a1b2..." }]
+ │    └── campus/
+ │         └── seoul.json
+ ├── meta/               # (Unchanged from previous design)
+ ├── aux/
+ │    ├── diff.json      # Delta: "Notice 101 changed hash A -> hash B"
+ │    └── errors.json    # NEW: Log of specific crawl failures
+
+```
 
 ### Data Components
 
-* **Index**: Read-optimized JSON lists containing minimal fields for rendering UI lists.
-* **Meta**: Reference data that helps the frontend or API interpret campus and category IDs.
-* **Detail**: The "Source of Truth" for each notice, containing the full body, attachments, and original metadata.
-* **Aux (Delta-First)**: The `diff.json` provides a summary of added or updated notices, allowing notification services to trigger without comparing full indices.
+| Component | Function | Storage Location | Cache Strategy |
+| --- | --- | --- | --- |
+| **Pointer** | Points to active version | `root/latest.json` | `max-age=10` |
+| **Index** | Light UI metadata + Hash Refs | `snapshots/{v}/index/` | `immutable` |
+| **Blob** | The full notice body | `blobs/sha256/{hash}` | `immutable` |
+| **Delta** | Notification triggers | `snapshots/{v}/aux/diff` | `max-age=60` |
 
-### Pointer-Based Atomic Rotation
+## Resilience & Error Handling
 
-To ensure consumers always see a consistent state without relying on S3 directory listing performance:
+In a distributed crawl, we must assume some targets will be slow or down.
 
-* A **Pointer File** is maintained at the root: `latest.json`.
-* It contains the key of the most recent successful `{version}`.
-* **Atomic Switch**: Updating this single file "activates" the new snapshot globally.
-* **Fallback**: In case of a crawl failure, the pointer remains at the previous version, ensuring the API/App never serves a broken state.
+* **Dead Letter Queue (DLQ)**: If a Worker Lambda crashes or times out repeatedly on a specific URL, the message is moved to an SQS DLQ. This prevents "poison pill" notices from blocking the queue.
+* **Error Manifest (`errors.json`)**:
+* Instead of failing the entire snapshot, partial failures are acceptable.
+* Failed boards are logged in `snapshots/{version}/aux/errors.json`.
+* The frontend can use this to display a "Data may be incomplete for [Department Name]" warning.
 
-### Cache Optimization
+* **Stale-Data Fallback**: If a specific board fails to crawl, the Aggregator can optionally copy the *previous version's* fragments for that board into the current snapshot, ensuring the UI remains populated.
 
-* latest.json : max-age=2~10, stale-while-revalidate=...
-* snapshots/{version}/index/* : max-age=1y, immutable
-* snapshots/{version}/meta/* : max-age=1y, immutable
-* snapshots/{version}/detail/* : max-age=1y, immutable
-* snapshots/{version}/aux/* : max-age=1h, stale-while-revalidate=...
+## Security & Access Control
 
-## Canonical Notice Identification
+* **No Public S3**: The S3 bucket strictly blocks public access.
+* **CloudFront Distribution**:
+* Acts as the only gateway to the data.
+* Uses **Origin Access Control (OAC)** to authenticate with S3.
+* Enforces HTTPS/TLS 1.3.
 
-Each notice is assigned a deterministic identifier derived from stable attributes:
+* **WAF (Web Application Firewall)**:
+* Attached to CloudFront.
+* Rate limits IP addresses to prevent scraping abuse.
 
-* **Campus & Department ID**
-* **Original Notice Number/ID** from the source system
-* **Stable URL**
+* **CORS**: Configured at the CloudFront level to allow only specific app origins.
 
-This ensures reliable deduplication across multiple crawl cycles and maintains consistent `{noticeId}.json` filenames.
+## Search Integration
 
-## Concurrency & Idempotency
+Full-text search is decoupled from the crawl loop to ensure performance.
 
-* **Isolated Writes**: Since each execution writes to a unique `{version}` path, there is no risk of write-collision.
-* **Idempotency**: Retrying a crawl for the same version (if manually triggered) will yield the same directory structure.
-
-## Retention & Lifecycle Management
-
-* **S3 Lifecycle Rules**:
-* `snapshots/{version}/detail/`: Long-term retention (Event Storage).
-* `snapshots/{version}/index/`: Short to medium retention (Read Cache).
-
-* Old versions can be archived to Glacier or deleted after a set period, while the `latest` pointer ensures system continuity.
-
-## Deployment Model
-
-* **Runtime**: AWS Lambda (ARM64) binary built with `cargo lambda`.
-* **Infrastructure**: Managed via Terraform.
-* **Storage**: AWS S3 (Standard for active versions, Intelligent-Tiering for older ones).
-
-## Future Extensions
-
-* **Micro-Caching**: Serving the `index/` files via CloudFront with aggressive edge caching.
-* **Incremental Crawling**: Using the previous version's indices to skip unchanged boards.
-* **Full-Text Search**: Ingesting the `detail/` files into a lightweight search index (e.g., Meilisearch or OpenSearch).
+1. **Event**: S3 emits an event `s3:ObjectCreated:Put` when a new file lands in `blobs/`.
+2. **Indexer Lambda**: A small Lambda triggers on this event.
+3. **Action**: It pushes the JSON document into **Meilisearch** or **AWS OpenSearch**.
+4. **Result**: The search index is updated near real-time, only processing *new* or *changed* content (deduplicated by the CAS nature of the `blobs` directory).
 
 ## Summary
 
-This architecture treats university notices as a series of immutable, versioned snapshots. By separating indices, details, and deltas into a structured S3 hierarchy, **uRing Crawler** achieves high reliability, easy auditability, and simple consumption for downstream services.
+By adopting **Content-Addressable Storage**, the uRing Crawler reduces S3 write costs by orders of magnitude. By moving to a **Fan-Out architecture**, it gains the ability to crawl hundreds of departments in parallel without timeout risks. This architecture represents a mature, resilient foundation ready for production scale.
