@@ -1,166 +1,168 @@
 # uRing Crawler
 
-This document describes the internal architecture of the **uRing Crawler**, a serverless, event-driven system designed to ingest university notice data. This version introduces **Content-Addressable Storage (CAS)** and a **Fan-Out/Fan-In** execution model to maximize deduplication, concurrency, and fault tolerance.
+**Type:** Serverless · Event-Driven · Thick Client
+**Core Philosophy:** "Dumb Backend, Smart Client"
 
-## Table of Contents
+## Executive Summary
 
-* [Design Principles](#design-principles)
-* [High-Level Architecture](#high-level-architecture)
-* [The Fan-Out Ingestion Pipeline](#the-fan-out-ingestion-pipeline)
-* [Storage Strategy: CAS & Deduplication](#storage-strategy-cas--deduplication)
-  * [The Blob Store (Content)](#the-blob-store-content)
-  * [The Snapshot Layer (Structure)](#the-snapshot-layer-structure)
-  * [Data Components](#data-components)
-* [Resilience & Error Handling](#resilience--error-handling)
-* [Security & Access Control](#security--access-control)
-* [Search Integration](#search-integration)
-* [Summary](#summary)
+uRing is a lightweight, high-reliability system designed to detect and distribute university announcements in near real-time. It adheres strictly to a **"Push Changes, Pull Data"** model.
 
-## Design Principles
+The backend acts solely as a **change detection engine**—it does not store HTML bodies, manage user accounts, or perform keyword filtering. By offloading logic to the client and leveraging a **"Compare-and-Swap"** strategy with **FIFO enforcement**, the system achieves extreme cost efficiency while guaranteeing data correctness and idempotency.
 
-* **Content-Addressable Persistence**: Data is stored based on its content hash (SHA-256), not its location. This eliminates 99% of redundant writes.
-* **Asynchronous Fan-Out**: Crawl jobs are distributed across concurrent workers via queues, decoupled from the scheduling logic.
-* **Partial Availability**: The system is designed to succeed even if specific target sites fail. Errors are cataloged, not fatal.
-* **Edge-First Delivery**: All reads are served via a CDN (CloudFront) with aggressive caching policies.
+## Design Goals
+
+1. **Minimal Backend Intelligence:** The server only detects *changes*. Interpretation (filtering, read status) is client-side.
+2. **Concurrency Safety:** Department-level serialization prevents race conditions during updates.
+3. **Idempotency:** "Effectively once" delivery guarantees for push notifications.
+4. **Cache Efficiency:** Heavy reliance on CDNs (CloudFront) and ETags to minimize S3 egress.
+5. **Revision Awareness:** Capable of tracking updates to existing notices (e.g., title changes, pinned status).
 
 ## High-Level Architecture
 
-The system moves from a monolithic Lambda to a distributed **Orchestrator-Worker-Aggregator** pattern.
+The system decouples **Data Ingestion (Pull)** from **Notification Delivery (Push)**, using SQS FIFO queues to enforce order and isolation.
+
+```mermaid
+graph TD
+    subgraph Scheduler
+    EB[EventBridge\n(Every 10 min)] -->|Trigger| Orch[Orchestrator Lambda]
+    end
+
+    subgraph Ingestion Pipeline [Ordered Ingestion]
+    Orch -->|Dispatch Jobs| SQS_W[SQS FIFO: Work Queue]
+    SQS_W -.->|Group: dept_id| Worker[Worker Lambda]
+    Worker -->|1. Fetch & Hash| Web[University Website]
+    Worker -->|2. Read State| S3[(S3 Bucket)]
+    end
+
+    subgraph Storage Strategy
+    Worker -->|3. Dual Write| S3
+    S3 -->|Mutable/Hot| Hot[latest.json]
+    S3 -->|Append-Only/Cold| Cold[archive/202601.jsonl]
+    end
+
+    subgraph Notification Pipeline [Idempotent Delivery]
+    Worker -->|4. If Change Detected| SQS_N[SQS FIFO: Notify Queue]
+    SQS_N -->|Trigger| Notifier[Notifier Lambda]
+    Notifier -->|5. Dedup & Send| FCM[Firebase Cloud Messaging]
+    end
+
+    subgraph Distribution
+    S3 -->|Cache & ETag| CF[CloudFront CDN]
+    CF -->|Pull Data| App[Mobile Client]
+    FCM -->|Push Signal| App
+    end
+
+```
+
+## Data Storage Strategy
+
+We employ a **Hot/Cold separation** strategy. This ensures O(1) read performance for the app dashboard while maintaining a complete, append-only history for auditing and pagination.
+
+### Directory Structure
 
 ```text
-[ EventBridge (Cron) ]
-          |
-          v
-[ Orchestrator Lambda ] --(Batch Jobs)--> [ SQS FIFO Queue ]
-                                                 |
-                                                 v
-                                        [ Worker Lambdas (Scale n...) ]
-                                                 | (Write Blobs & Fragments)
-                                                 v
-                                        [ S3 (Staging & Blob Store) ]
-                                                 |
-                                         (Event / Finalize)
-                                                 v
-                                        [ Aggregator Lambda ]
-                                                 |
-                                                 v
-                                        [ S3 (Final Indices & Pointer) ]
+S3/
+ ├── config/
+ │    └── sitemap.json           # Target configurations
+ └── data/
+      └── {department_id}/       # e.g., yonsei_cs
+           ├── latest.json       # [Hot] Top 30 Items + Meta (Mutable)
+           └── archive/          # [Cold] Historical Data
+                ├── 202601.jsonl # Jan 2026 (Append-only Log)
+                └── ...
 
 ```
 
-## The Fan-Out Ingestion Pipeline
+### Data Schema (Revision-Aware)
 
-The crawl cycle is broken down into three distinct phases to ensure scalability:
+To handle updates (e.g., a typo correction in a title), we track revisions and hashes.
 
-### 1. The Orchestrator (Scheduling)
+**File:** `yonsei_cs/latest.json`
 
-* **Trigger**: Runs every 10 minutes via EventBridge.
-* **Responsibility**: Reads the `siteMap.json`. It does **not** fetch external websites.
-* **Action**: Splits the sitemap into discrete "Job Messages" (e.g., `Crawl { Dept: CS, URL: ... }`) and pushes them to an Amazon SQS FIFO queue to ensure exactly-once delivery.
-
-### 2. The Workers (Execution)
-
-* **Trigger**: SQS Lambda Event Source Mapping (scales automatically based on queue depth).
-
-* **Responsibility**:
-
-  1. Fetch HTML from the target URL.
-  2. Parse notices.
-  3. Compute **SHA-256 Hash** of the notice body.
-  4. **CAS Check**: If `blobs/sha256/{hash}.json` exists, skip writing the body. If not, write it.
-  5. Write a lightweight **Notice Fragment** (metadata + hash reference) to a temporary staging area in S3.
-
-### 3. The Aggregator (Commit)
-
-* **Trigger**: Triggered once the SQS queue is drained or by a "EndOfBatch" message.
-
-* **Responsibility**:
-
-  1. Reads all Notice Fragments from the staging area.
-  2. Generates the aggregate `index/` files and `aux/diff.json`.
-  3. Writes the versioned snapshot.
-  4. Updates the `latest.json` pointer to make the new data live.
-
-## Storage Strategy: CAS & Deduplication
-
-We separate the **Content** (Heavy, rarely changes) from the **Structure** (Light, changes often).
-
-### The Blob Store (Content)
-
-This directory acts as a global database of unique notices. Files here are never deleted (unless via long-term lifecycle policies) and never overwritten.
-
-```shell
-blobs/
- └─ sha256/
-     ├─ a1b2...e4.json   # Actual content of a notice
-     ├─ c9d8...f1.json   # Content of another notice
-     └─ ...
+```json
+{
+  "meta": {
+    "dept_name": "Computer Science",
+    "base_url": "https://cs.yonsei.ac.kr",
+    "last_updated": "2026-01-22T10:00:00Z"
+  },
+  "items": [
+    {
+      "id": "notice_12345",
+      "title": "Scholarship Announcement (Revised)",
+      "date": "2026-01-22",
+      "category": "Undergraduate",
+      "link": "/board/view?id=12345",
+      "is_pinned": false,
+      "revision": 2,
+      "hash": "a1b2c3d4...", 
+      "first_seen": "2026-01-22T09:00:00Z"
+    }
+    // ... Max 30 items
+  ]
+}
 
 ```
 
-### The Snapshot Layer (Structure)
+## Operational Workflows
 
-Snapshots now act as **Manifests**. They map canonical IDs to Content Hashes. This makes the snapshots incredibly small and fast to generate.
+### Ingestion (The Worker)
 
-```shell
-snapshots/{version}/
- ├── index/
- │    ├── all.json       # List: [{ "id": 101, "title": "...", "content_hash": "a1b2..." }]
- │    └── campus/
- │         └── seoul.json
- ├── meta/               # (Unchanged from previous design)
- ├── aux/
- │    ├── diff.json      # Delta: "Notice 101 changed hash A -> hash B"
- │    └── errors.json    # NEW: Log of specific crawl failures
+**Concurrency Control:** The Work Queue is **SQS FIFO**. We set `MessageGroupId = department_id`. This guarantees that multiple Lambdas can run in parallel for *different* departments, but *never* for the same department, eliminating race conditions on `latest.json`.
 
-```
+1. **Fetch & Hash:** Scrape Page 1. Generate a hash `sha1(title|date|category|link)` for every item.
+2. **Load State:** Read the existing `latest.json` from S3.
+3. **Diff Logic:**
 
-### Data Components
+* *New ID:* Treat as **New Item**.
+* *Existing ID + New Hash:* Treat as **Update** (Increment revision).
+* *Existing ID + Same Hash:* Ignore.
 
-| Component | Function | Storage Location | Cache Strategy |
-| --- | --- | --- | --- |
-| **Pointer** | Points to active version | `root/latest.json` | `max-age=10` |
-| **Index** | Light UI metadata + Hash Refs | `snapshots/{v}/index/` | `immutable` |
-| **Blob** | The full notice body | `blobs/sha256/{hash}` | `immutable` |
-| **Delta** | Notification triggers | `snapshots/{v}/aux/diff` | `max-age=60` |
+1. **Dual Write:**
 
-## Resilience & Error Handling
+* **Hot:** Prepend new/updated items to `latest.json`. Truncate to 30 items.
+* **Cold:** Append the item to `archive/YYYYMM.jsonl` (JSON Lines format for efficient appending).
 
-In a distributed crawl, we must assume some targets will be slow or down.
+### Notification (The Notifier)
 
-* **Dead Letter Queue (DLQ)**: If a Worker Lambda crashes or times out repeatedly on a specific URL, the message is moved to an SQS DLQ. This prevents "poison pill" notices from blocking the queue.
+**Idempotency Strategy:** To prevent duplicate alerts (a common issue with distributed systems), we implement deduplication.
 
-* **Error Manifest (`errors.json`)**:
-  * Instead of failing the entire snapshot, partial failures are acceptable.
-  * Failed boards are logged in `snapshots/{version}/aux/errors.json`.
-  * The frontend can use this to display a "Data may be incomplete for [Department Name]" warning.
+1. **Trigger:** Worker sends a payload to the Notification Queue only for meaningful changes.
+2. **Deduplication:**
 
-* **Stale-Data Fallback**: If a specific board fails to crawl, the Aggregator can optionally copy the *previous version's* fragments for that board into the current snapshot, ensuring the UI remains populated.
+* Ideally handled via a **DynamoDB TTL table** acting as a lock.
+* Key: `idempotency_key = dept_id + notice_id + revision`
+* If key exists: Skip. If not: Write key (30 min TTL) and proceed.
 
-## Security & Access Control
+1. **Send:** Dispatch a **Data Message** to the FCM Topic (e.g., `topic: yonsei_cs`).
 
-* **No Public S3**: The S3 bucket strictly blocks public access.
+## Client-Side Strategy (Thick Client)
 
-* **CloudFront Distribution**:
-  * Acts as the only gateway to the data.
-  * Uses **Origin Access Control (OAC)** to authenticate with S3.
-  * Enforces HTTPS/TLS 1.3.
+The backend provides raw data; the client application owns the user experience.
 
-* **WAF (Web Application Firewall)**:
-  * Attached to CloudFront.
-  * Rate limits IP addresses to prevent scraping abuse.
+| Feature | Implementation Logic |
+| --- | --- |
+| **Subscription** | App subscribes directly to FCM Topics (e.g., `subscribeToTopic('yonsei_cs')`). No backend user DB. |
+| **Notification Display** | FCM sends a **Data-only** payload. The App wakes up in the background, checks the `title` against the user's **Local Keyword List** (e.g., "Scholarship"), and decides whether to show a system banner or suppress it. |
+| **Pagination** | 1. Load `latest.json`. 2. On scroll end, calculate previous month (`202512`) and fetch `archive/202512.jsonl`. |
+| **Caching (ETag)** | The App sends `If-None-Match` headers when fetching `latest.json`. CloudFront returns `304 Not Modified` if nothing changed, saving bandwidth. |
+| **Read Status** | Stored locally (SQLite/SharedPreferences). |
 
-* **CORS**: Configured at the CloudFront level to allow only specific app origins.
+## Infrastructure & Safety
 
-## Search Integration
+* **Compute:** AWS Lambda (Python/Node.js).
+* **Queues:** AWS SQS **FIFO** (Ensures ordering and exactly-once processing).
+* **Storage:** AWS S3 (Standard).
+* `latest.json`: **TTL 5 min** (via Cache-Control headers).
+* `archive/*`: **Long-term storage**.
 
-Full-text search is decoupled from the crawl loop to ensure performance.
+* **CDN:** Amazon CloudFront (Edge caching).
+* **Observability:**
+* Logs must include `department_id`, `new_items_count`, and `revision`.
+* Alarms on `DLQ Depth > 0` (Worker failures).
 
-  1. **Event**: S3 emits an event `s3:ObjectCreated:Put` when a new file lands in `blobs/`.
-  2. **Indexer Lambda**: A small Lambda triggers on this event.
-  3. **Action**: It pushes the JSON document into **Meilisearch** or **AWS OpenSearch**.
-  4. **Result**: The search index is updated near real-time, only processing *new* or *changed* content (deduplicated by the CAS nature of the `blobs` directory).
+### Architectural Summary: Why this works
 
-## Summary
-
-By adopting **Content-Addressable Storage**, the uRing Crawler reduces S3 write costs by orders of magnitude. By moving to a **Fan-Out architecture**, it gains the ability to crawl hundreds of departments in parallel without timeout risks. This architecture represents a mature, resilient foundation ready for production scale.
+1. **Cost:** We only pay for compute when the scheduler runs, and 99% of requests hit the CloudFront cache (cheap) rather than Lambda (expensive).
+2. **Scale:** Adding a new university simply means adding a config entry. The FIFO queue automatically handles the load balancing.
+3. **Reliability:** Even if the scraper crashes, the FIFO queue ensures the next attempt retries correctly without corrupting the JSON state.
