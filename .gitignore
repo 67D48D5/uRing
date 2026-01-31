@@ -3,6 +3,9 @@
 # Ignore system files
 .DS_Store
 
+# Ignore temporary files
+*.tmp
+
 # Ignore IDE/editor files
 .vscode/
 .idea/

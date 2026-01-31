@@ -1,7 +1,6 @@
-# .gitignore for Crawler
+# .gitignore
 
 # Ignore build artifacts
-Cargo.lock
 target/
 
 # Ignore data files

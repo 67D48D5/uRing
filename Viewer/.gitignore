@@ -1,4 +1,4 @@
-# .gitignore for Viewer
+# .gitignore
 
 # Data files
 /public/data/*.json
